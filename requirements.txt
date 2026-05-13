@@ -1,0 +1,8 @@
+openWakeWord
+faster-whisper
+rapidfuzz
+pyautogui
+pygetwindow
+pyttsx3
+Pillow
+sounddevice
