@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import threading
+from queue import Queue
 
-audio_queue = threading.Queue()
+audio_queue = Queue()
 listening_for_command = False

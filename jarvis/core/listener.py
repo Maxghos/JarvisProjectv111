@@ -40,20 +40,34 @@ def _record_audio() -> np.ndarray:
 
 	if shared.listening_for_command:
 		# Consume from shared audio queue (single stream mode)
+		# Accumulate small frames into proper-sized chunks for silence detection
+		accumulator = np.empty(0, dtype=np.float32)
 		try:
 			while len(recorded_chunks) < max_chunks:
 				audio_frame = shared.audio_queue.get(timeout=0.1)
 				mono_chunk = np.asarray(audio_frame, dtype=np.int16).reshape(-1)
 				# Convert from int16 to float32 for consistency
 				mono_chunk_float = mono_chunk.astype(np.float32) / 32768.0
-				recorded_chunks.append(mono_chunk_float)
-
-				if len(recorded_chunks) > min_chunks_before_silence and _is_silent(mono_chunk_float):
-					silent_chunks += 1
-					if silent_chunks >= silence_chunks:
-						break
-				else:
-					silent_chunks = 0
+				
+				# Accumulate frames until we have a full chunk
+				accumulator = np.concatenate([accumulator, mono_chunk_float])
+				
+				if len(accumulator) >= _CHUNK_FRAMES:
+					# We have a full chunk - check silence and add to recorded_chunks
+					full_chunk = accumulator[:_CHUNK_FRAMES]
+					accumulator = accumulator[_CHUNK_FRAMES:]
+					recorded_chunks.append(full_chunk)
+					
+					if len(recorded_chunks) > min_chunks_before_silence and _is_silent(full_chunk):
+						silent_chunks += 1
+						if silent_chunks >= silence_chunks:
+							break
+					else:
+						silent_chunks = 0
+			
+			# Add any remaining accumulated samples after loop ends
+			if len(accumulator) > 0 and recorded_chunks:
+				recorded_chunks.append(accumulator)
 		except Exception as e:
 			print(f"[Jarvis] Error consumiendo del queue: {e}")
 			if not recorded_chunks:

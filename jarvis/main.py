@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import queue
 import sys
 import threading
 import time
@@ -43,6 +44,7 @@ except Exception as e:
 
 _assistant_active = threading.Event()
 _shutdown_event = threading.Event()
+_command_queue = queue.Queue()
 
 
 def _audio_callback(indata, frames, time_info, status):
@@ -126,7 +128,7 @@ def _listen_for_wake_word() -> None:
 						best_key = key
 				
 				if best_score >= _WAKE_WORD_THRESHOLD and not _assistant_active.is_set():
-					# Wake word detected!
+					# Wake word detected - signal main thread to handle it
 					_assistant_active.set()
 					if best_key:
 						print(f"[Jarvis] Activado por: {best_key}")
@@ -138,24 +140,12 @@ def _listen_for_wake_word() -> None:
 						except:
 							break
 					
-					# Signal that we're listening for command
+					# Signal main thread to handle wake word on main thread
+					# This ensures pyttsx3.speak() runs on main thread (Windows requirement)
+					_command_queue.put("wake")
+					print("[Jarvis] Comando enviado a main thread")
+					
 					shared.listening_for_command = True
-					
-					# Speak and listen
-					t = threading.Thread(target=speak, args=("Dime",))
-					t.start()
-					t.join()
-					print("[Jarvis] Hablando: Dime")
-					time.sleep(1.0)
-					
-					texto = listen()
-					print(f"[Jarvis] Escuché: '{texto}'")
-					_handle_transcription(texto)
-					
-					shared.listening_for_command = False
-					_assistant_active.clear()
-					time.sleep(0.5)
-					print("[Jarvis] Volviendo a escuchar...")
 			else:
 				# Waiting for listen() to finish - drain queue
 				try:
@@ -173,7 +163,35 @@ def main() -> None:
 
 	try:
 		while not _shutdown_event.is_set():
-			time.sleep(0.5)
+			try:
+				command = _command_queue.get(timeout=0.5)
+				
+				if command == "wake":
+					# Main thread handles speaking and listening (pyttsx3 Windows requirement)
+					print("[Jarvis] Main thread: Hablando 'Dime'...")
+					speak("Dime")
+					time.sleep(1.0)
+					
+					# Clear any audio captured during TTS playback
+					while not shared.audio_queue.empty():
+						try:
+							shared.audio_queue.get_nowait()
+						except:
+							break
+					
+					print("[Jarvis] Main thread: Escuchando comando...")
+					texto = listen()
+					print(f"[Jarvis] Escuché: '{texto}'")
+					
+					_handle_transcription(texto)
+					
+					shared.listening_for_command = False
+					_assistant_active.clear()
+					time.sleep(0.5)
+					print("[Jarvis] Volviendo a escuchar...")
+			except queue.Empty:
+				# No command, just continue
+				pass
 	except KeyboardInterrupt:
 		_shutdown_event.set()
 
